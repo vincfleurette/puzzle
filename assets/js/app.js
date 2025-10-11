@@ -1,264 +1,408 @@
-// CONFIG — deux images :
-// 1) PUZZLE_IMAGE_URL : image des pièces (photo PACS)
-// 2) REVEAL_IMAGE_URL : image finale (échographie)
-// 3) SHOW_NUMBERS : afficher les numéros d'aide
-const PUZZLE_IMAGE_URL = 'assets/img/pacs.jpg';
-const REVEAL_IMAGE_URL = 'assets/img/baby.jpg';
-const SHOW_NUMBERS = true;
+class PuzzleGame {
+  constructor() {
+    this.canvas = document.getElementById('puzzleCanvas');
+    this.ctx = this.canvas.getContext('2d', { alpha: false });
+    this.revealOverlay = document.getElementById('revealOverlay');
+    this.messageCard = document.getElementById('messageCard');
+    this.hint = document.getElementById('hint');
 
-(function () {
-  // Grille portrait : 3 colonnes × 4 lignes (12 pièces)
-  const ROWS = 4, COLS = 3;
+    this.ROWS = 4;
+    this.COLS = 3;
+    this.TOTAL = this.ROWS * this.COLS;
 
-  // Réglages visuels
-  const KNOB_RATIO = 0.18;     // taille des languettes
-  const SNAP_RATIO = 0.24;     // tolérance de snap
-  const SHUFFLE_SPREAD = 0.16; // dispersion initiale au mélange
-  const PIECE_SCALE = 0.86;    // <1 = pièces plus petites que la cellule
+    this.puzzleImage = new Image();
+    this.puzzleImage.src = 'assets/img/pacs.jpg';
 
-  // Dimensions logiques (px CSS)
-  let VIEW_W = 0, VIEW_H = 0;
+    this.pieces = [];
+    this.draggedPiece = null;
+    this.completedCount = 0;
+    this.isComplete = false;
 
-  // DOM
-  const canvas = document.getElementById('puzzle');
-  const ctx = canvas.getContext('2d');
-  const cfx = document.getElementById('confetti');
-  const cctx = cfx.getContext('2d');
-  const announceEl = document.getElementById('announce');
-
-  // Images
-  const imgPuzzle = new Image(); imgPuzzle.crossOrigin = 'anonymous'; imgPuzzle.decoding = 'async'; imgPuzzle.src = PUZZLE_IMAGE_URL;
-  const imgReveal = new Image(); imgReveal.crossOrigin = 'anonymous'; imgReveal.decoding = 'async'; imgReveal.src = REVEAL_IMAGE_URL;
-
-  // État
-  let pieces = [];                      // {r,c,tabs:{t,r,b,l}, x,y, tx,ty, w,h, placed, z}
-  let dragging = null, dragDx = 0, dragDy = 0;
-  let placedCount = 0;
-  let running = false, completed = false;
-
-  // Utils
-  function waitImage(image) { return new Promise(res => { if (image.complete && image.naturalWidth) res(); else image.onload = res; }); }
-  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-
-  // Layout responsive (dessin en px CSS avec DPR)
-  function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const rect = canvas.getBoundingClientRect();
-    const cssW = Math.round(rect.width);
-    const cssH = Math.round(rect.width * (4 / 3)); // portrait 3:4
-
-    VIEW_W = cssW; VIEW_H = cssH;
-
-    canvas.width = Math.max(300, Math.round(cssW * dpr));
-    canvas.height = Math.max(400, Math.round(cssH * dpr));
-    cfx.width = canvas.width; cfx.height = canvas.height;
-
-    // On dessine en unités CSS
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.init();
   }
 
-  // Géométrie des pièces
-  function genTabs() {
-    const tabs = Array.from({ length: ROWS }, () => Array.from({ length: COLS }, () => ({ t: 0, r: 0, b: 0, l: 0 })));
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        tabs[r][c].t = (r === 0) ? 0 : (-tabs[r - 1][c].b);
-        tabs[r][c].l = (c === 0) ? 0 : (-tabs[r][c - 1].r);
-        tabs[r][c].b = (r === ROWS - 1) ? 0 : (Math.random() < .5 ? 1 : -1);
-        tabs[r][c].r = (c === COLS - 1) ? 0 : (Math.random() < .5 ? 1 : -1);
-      }
-    }
-    return tabs;
-  }
-
-  function buildPieces() {
-    const tabs = genTabs();
-    pieces = [];
-    const W = VIEW_W, H = VIEW_H;
-    const cellW = W / COLS, cellH = H / ROWS;
-    const pw = cellW * PIECE_SCALE, ph = cellH * PIECE_SCALE;
-    const insetX = (cellW - pw) / 2, insetY = (cellH - ph) / 2;
-
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const cellX = c * cellW, cellY = r * cellH;
-        const tx = cellX + insetX, ty = cellY + insetY;
-        pieces.push({ r, c, tabs: tabs[r][c], x: tx, y: ty, tx, ty, w: pw, h: ph, placed: false, z: 0 });
-      }
-    }
-  }
-
-  function piecePath(p) {
-    const { x, y, w, h, tabs } = p;
-    const k = Math.min(w, h) * KNOB_RATIO, crv = k * 0.6;
-    ctx.beginPath();
-    // top
-    ctx.moveTo(x, y);
-    if (tabs.t === 0) ctx.lineTo(x + w, y); else { const dir = tabs.t, mx = x + w / 2, ty = y; ctx.lineTo(mx - k, ty); ctx.bezierCurveTo(mx - k, ty - crv * dir, mx - crv, ty - k * dir, mx, ty - k * dir); ctx.bezierCurveTo(mx + crv, ty - k * dir, mx + k, ty - crv * dir, mx + k, ty); ctx.lineTo(x + w, y); }
-    // right
-    if (tabs.r === 0) ctx.lineTo(x + w, y + h); else { const dir = tabs.r, my = y + h / 2, rx = x + w; ctx.lineTo(rx, my - k); ctx.bezierCurveTo(rx + crv * dir, my - k, rx + k * dir, my - crv, rx + k * dir, my); ctx.bezierCurveTo(rx + k * dir, my + crv, rx + crv * dir, my + k, rx, my + k); ctx.lineTo(x + w, y + h); }
-    // bottom
-    if (tabs.b === 0) ctx.lineTo(x, y + h); else { const dir = tabs.b, mx = x + w / 2, by = y + h; ctx.lineTo(mx + k, by); ctx.bezierCurveTo(mx + k, by + crv * dir, mx + crv, by + k * dir, mx, by + k * dir); ctx.bezierCurveTo(mx - crv, by + k * dir, mx - k, by + crv * dir, mx - k, by); ctx.lineTo(x, y + h); }
-    // left
-    if (tabs.l === 0) ctx.lineTo(x, y); else { const dir = tabs.l, my = y + h / 2, lx = x; ctx.lineTo(lx, my + k); ctx.bezierCurveTo(lx - crv * dir, my + k, lx - k * dir, my + crv, lx - k * dir, my); ctx.bezierCurveTo(lx - k * dir, my - crv, lx - crv * dir, my - k, lx, my - k); ctx.lineTo(x, y); }
-    ctx.closePath();
-  }
-
-  // Rendu images (mode COVER)
-  function drawFullRevealImage() {
-    const W = VIEW_W, H = VIEW_H;
-    const iw = imgReveal.naturalWidth, ih = imgReveal.naturalHeight; if (!iw || !ih) return;
-    const s = Math.max(W / iw, H / ih);
-    const dw = Math.round(iw * s), dh = Math.round(ih * s);
-    const dx = Math.round((W - dw) / 2), dy = Math.round((H - dh) / 2);
-    ctx.drawImage(imgReveal, dx, dy, dw, dh);
-  }
-
-  function drawPieceImage(p) {
-    const W = VIEW_W, H = VIEW_H;
-    const iw = imgPuzzle.naturalWidth, ih = imgPuzzle.naturalHeight; if (!iw || !ih) return;
-    const s = Math.max(W / iw, H / ih);
-    const dw = Math.round(iw * s), dh = Math.round(ih * s);
-    const dx = Math.round((W - dw) / 2), dy = Math.round((H - dh) / 2);
-
-    ctx.save();
-    piecePath(p); ctx.clip();
-    ctx.drawImage(imgPuzzle, dx, dy, dw, dh);
-
-    // contour
-    ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-    piecePath(p); ctx.stroke();
-
-    // Numéro d'aide
-    if (SHOW_NUMBERS && !completed) {
-      const idx = p.r * COLS + p.c + 1;
-      const padX = 8, padY = 6;
-      const fontSize = Math.max(12, Math.round(Math.min(p.w, p.h) * 0.12));
-      const label = String(idx);
-      ctx.font = `${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
-      const tw = ctx.measureText(label).width;
-      const lw = Math.max(24, tw + padX * 2), lh = Math.max(18, fontSize + padY * 2);
-      const lx = p.x + p.w - lw - 8, ly = p.y + p.h - lh - 8;
-      ctx.fillStyle = 'rgba(0,0,0,0.55)'; roundRect(ctx, lx, ly, lw, lh, 6); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 0.8; roundRect(ctx, lx, ly, lw, lh, 6); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label, lx + lw / 2, ly + lh / 2 + 0.5);
-    }
-    ctx.restore();
-  }
-
-  // Rendu
-  function draw() {
-    const W = VIEW_W, H = VIEW_H;
-    ctx.clearRect(0, 0, W, H);
-    if (completed) { drawFullRevealImage(); return; }
-    const order = pieces.map((p, i) => ({ i, z: p.z || 0 })).sort((a, b) => a.z - b.z).map(o => o.i);
-    for (const i of order) drawPieceImage(pieces[i]);
-  }
-
-  // Jeu
-  function shuffle() {
-    const W = VIEW_W, H = VIEW_H;
-    const spreadX = W * SHUFFLE_SPREAD, spreadY = H * SHUFFLE_SPREAD;
-    for (const p of pieces) {
-      p.x = clamp(p.tx + (Math.random() * 2 - 1) * spreadX, 0, W - p.w);
-      p.y = clamp(p.ty + (Math.random() * 2 - 1) * spreadY, 0, H - p.h);
-      p.placed = false; p.z = 0;
-    }
-    placedCount = 0; completed = false;
-    document.querySelector('.board-wrap')?.classList.remove('done');
-    announceEl.style.display = 'none';
-    running = true; draw();
-  }
-
-  function hit(p, mx, my) {
-    if (mx < p.x || mx > p.x + p.w || my < p.y || my > p.y + p.h) return false;
-    ctx.save(); piecePath(p); const ok = ctx.isPointInPath(mx, my); ctx.restore(); return ok;
-  }
-
-  function onDown(x, y) {
-    if (!running) return;
-    for (let i = pieces.length - 1; i >= 0; i--) {
-      const p = pieces[i]; if (p.placed) continue;
-      if (hit(p, x, y)) { dragging = i; dragDx = x - p.x; dragDy = y - p.y; p.z = (p.z || 0) + 1; break; }
-    }
-    draw();
-  }
-  function onMove(x, y) {
-    if (dragging != null) {
-      const p = pieces[dragging];
-      p.x = clamp(x - dragDx, 0, VIEW_W - p.w);
-      p.y = clamp(y - dragDy, 0, VIEW_H - p.h);
-      draw();
-    }
-  }
-  function onUp() {
-    if (dragging == null) return;
-    const p = pieces[dragging]; dragging = null;
-    const tol = Math.min(p.w, p.h) * SNAP_RATIO;
-    if (Math.hypot(p.x - p.tx, p.y - p.ty) <= tol) {
-      p.x = p.tx; p.y = p.ty;
-      if (!p.placed) { p.placed = true; placedCount++; popConfetti(); }
-      if (placedCount === ROWS * COLS) { running = false; reveal(); }
-    }
-    draw();
-  }
-
-  function reveal() {
-    completed = true;
-    document.querySelector('.board-wrap')?.classList.add('done');
-    announceEl.style.display = 'block';
-    let a = 0;
-    const step = () => {
-      const W = VIEW_W, H = VIEW_H;
-      a += 0.06; if (a > 1) a = 1;
-      ctx.clearRect(0, 0, W, H);
-      ctx.globalAlpha = a; drawFullRevealImage(); ctx.globalAlpha = 1;
-      if (a < 1) requestAnimationFrame(step);
+  init() {
+    this.setupCanvas();
+    this.puzzleImage.onload = () => {
+      this.createPieces();
+      this.shufflePieces();
+      this.render();
     };
-    step();
+
+    this.setupEventListeners();
+    window.addEventListener('resize', () => this.handleResize());
   }
 
-  // Confettis
-  let confetti = []; let confettiAnim = null;
-  function popConfetti() {
-    const W = cfx.width, H = cfx.height;
-    for (let i = 0; i < 28; i++) confetti.push({ x: Math.random() * W, y: -10, vx: (Math.random() * 2 - 1) * 1.4, vy: Math.random() * 2 + 1, life: 60 + Math.random() * 40, rot: Math.random() * Math.PI });
-    if (!confettiAnim) animateConfetti();
+  setupCanvas() {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    
+    this.canvas.width = rect.width * dpr;
+    this.canvas.height = rect.height * dpr;
+    
+    this.ctx.scale(dpr, dpr);
+    
+    this.canvasWidth = rect.width;
+    this.canvasHeight = rect.height;
+    this.pieceWidth = this.canvasWidth / this.COLS;
+    this.pieceHeight = this.canvasHeight / this.ROWS;
   }
-  function animateConfetti() {
-    confettiAnim = requestAnimationFrame(tick);
-    function tick() {
-      cctx.clearRect(0, 0, cfx.width, cfx.height);
-      cctx.save();
-      for (let i = confetti.length - 1; i >= 0; i--) {
-        const p = confetti[i];
-        p.x += p.vx; p.y += p.vy; p.vy += 0.03; p.life--; p.rot += 0.1;
-        if (p.life <= 0 || p.y > cfx.height + 10) confetti.splice(i, 1);
-        else { cctx.save(); cctx.translate(p.x, p.y); cctx.rotate(p.rot); cctx.fillStyle = 'rgba(255,255,255,0.9)'; cctx.fillRect(-2, -6, 4, 12); cctx.restore(); }
+
+  createPieces() {
+    this.pieces = [];
+    
+    for (let row = 0; row < this.ROWS; row++) {
+      for (let col = 0; col < this.COLS; col++) {
+        this.pieces.push({
+          id: row * this.COLS + col,
+          row,
+          col,
+          targetX: col * this.pieceWidth,
+          targetY: row * this.pieceHeight,
+          currentX: col * this.pieceWidth,
+          currentY: row * this.pieceHeight,
+          isPlaced: false,
+          zIndex: 0
+        });
       }
-      cctx.restore();
-      if (confetti.length > 0) { confettiAnim = requestAnimationFrame(tick); } else { cancelAnimationFrame(confettiAnim); confettiAnim = null; }
     }
   }
 
-  // Événements pointeur (coordonnées en px CSS)
-  const toCanvas = (e) => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left), y: (e.clientY - r.top) }; };
-  let pointerDown = false;
-  canvas.addEventListener('mousedown', e => { const p = toCanvas(e); onDown(p.x, p.y); pointerDown = true; });
-  window.addEventListener('mousemove', e => { if (!pointerDown) return; const p = toCanvas(e); onMove(p.x, p.y); });
-  window.addEventListener('mouseup', () => { if (!pointerDown) return; pointerDown = false; onUp(); });
+  shufflePieces() {
+    // Create grid positions
+    const positions = [];
+    for (let row = 0; row < this.ROWS; row++) {
+      for (let col = 0; col < this.COLS; col++) {
+        positions.push({
+          x: col * this.pieceWidth,
+          y: row * this.pieceHeight
+        });
+      }
+    }
 
-  canvas.addEventListener('touchstart', e => { const t = e.changedTouches[0]; const r = canvas.getBoundingClientRect(); onDown((t.clientX - r.left), (t.clientY - r.top)); e.preventDefault(); }, { passive: false });
-  window.addEventListener('touchmove', e => { if (dragging == null) return; const t = e.changedTouches[0]; const r = canvas.getBoundingClientRect(); onMove((t.clientX - r.left), (t.clientY - r.top)); e.preventDefault(); }, { passive: false });
-  window.addEventListener('touchend', () => { onUp(); });
+    // Shuffle positions
+    for (let i = positions.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [positions[i], positions[j]] = [positions[j], positions[i]];
+    }
 
-  // Init
-  function init() { resize(); buildPieces(); shuffle(); draw(); }
-  Promise.all([waitImage(imgPuzzle), waitImage(imgReveal)]).then(() => { init(); });
-  window.addEventListener('resize', () => { resize(); buildPieces(); draw(); });
+    // Assign shuffled positions with random offset
+    this.pieces.forEach((piece, index) => {
+      const pos = positions[index];
+      const offsetX = (Math.random() - 0.5) * this.pieceWidth * 0.5;
+      const offsetY = (Math.random() - 0.5) * this.pieceHeight * 0.5;
+      
+      piece.currentX = Math.max(0, Math.min(this.canvasWidth - this.pieceWidth, pos.x + offsetX));
+      piece.currentY = Math.max(0, Math.min(this.canvasHeight - this.pieceHeight, pos.y + offsetY));
+      piece.zIndex = index;
+    });
+  }
 
-  // Helper rectangle arrondi (pour le badge numéroté)
-  function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
-})();
+  render() {
+    if (this.isComplete) return;
+
+    this.ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+    // Draw background
+    this.ctx.fillStyle = '#0a0a0a';
+    this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+    // Draw target guides for empty slots
+    this.pieces.forEach(piece => {
+      if (!piece.isPlaced) {
+        this.drawGuide(piece);
+      }
+    });
+
+    // Draw placed pieces first
+    this.pieces
+      .filter(p => p.isPlaced)
+      .forEach(piece => this.drawPiece(piece, true));
+
+    // Draw floating pieces sorted by z-index
+    this.pieces
+      .filter(p => !p.isPlaced)
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .forEach(piece => this.drawPiece(piece, false));
+  }
+
+  drawGuide(piece) {
+    this.ctx.save();
+    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([6, 4]);
+    this.ctx.strokeRect(
+      piece.targetX + 2,
+      piece.targetY + 2,
+      this.pieceWidth - 4,
+      this.pieceHeight - 4
+    );
+    this.ctx.setLineDash([]);
+
+    // Draw number
+    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    this.ctx.font = 'bold 24px sans-serif';
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(
+      piece.id + 1,
+      piece.targetX + this.pieceWidth / 2,
+      piece.targetY + this.pieceHeight / 2
+    );
+    this.ctx.restore();
+  }
+
+  drawPiece(piece, isPlaced) {
+    const img = this.puzzleImage;
+    const srcX = piece.col * (img.width / this.COLS);
+    const srcY = piece.row * (img.height / this.ROWS);
+    const srcW = img.width / this.COLS;
+    const srcH = img.height / this.ROWS;
+
+    this.ctx.save();
+
+    // Shadow for floating pieces
+    if (!isPlaced) {
+      this.ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+      this.ctx.shadowBlur = 12;
+      this.ctx.shadowOffsetX = 0;
+      this.ctx.shadowOffsetY = 4;
+    }
+
+    // Draw image piece
+    this.ctx.drawImage(
+      img,
+      srcX, srcY, srcW, srcH,
+      piece.currentX,
+      piece.currentY,
+      this.pieceWidth,
+      this.pieceHeight
+    );
+
+    // Border
+    this.ctx.strokeStyle = isPlaced ? '#22c55e' : 'rgba(255, 255, 255, 0.7)';
+    this.ctx.lineWidth = isPlaced ? 3 : 2;
+    this.ctx.strokeRect(
+      piece.currentX,
+      piece.currentY,
+      this.pieceWidth,
+      this.pieceHeight
+    );
+
+    // Number badge for floating pieces
+    if (!isPlaced) {
+      const badgeSize = 26;
+      const badgeX = piece.currentX + this.pieceWidth - badgeSize - 6;
+      const badgeY = piece.currentY + this.pieceHeight - badgeSize - 6;
+
+      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      this.ctx.fillRect(badgeX, badgeY, badgeSize, badgeSize);
+
+      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      this.ctx.lineWidth = 1;
+      this.ctx.strokeRect(badgeX, badgeY, badgeSize, badgeSize);
+
+      this.ctx.fillStyle = 'white';
+      this.ctx.font = 'bold 13px sans-serif';
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(
+        piece.id + 1,
+        badgeX + badgeSize / 2,
+        badgeY + badgeSize / 2
+      );
+    }
+
+    this.ctx.restore();
+  }
+
+  setupEventListeners() {
+    // Mouse events
+    this.canvas.addEventListener('mousedown', (e) => this.handleStart(e));
+    window.addEventListener('mousemove', (e) => this.handleMove(e));
+    window.addEventListener('mouseup', () => this.handleEnd());
+
+    // Touch events
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.handleStart(e.touches[0]);
+    }, { passive: false });
+
+    window.addEventListener('touchmove', (e) => {
+      if (this.draggedPiece) {
+        e.preventDefault();
+        this.handleMove(e.touches[0]);
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => this.handleEnd());
+  }
+
+  getCanvasPosition(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+  }
+
+  handleStart(event) {
+    if (this.isComplete) return;
+
+    const pos = this.getCanvasPosition(event);
+
+    // Find clicked piece (reverse order to get topmost)
+    for (let i = this.pieces.length - 1; i >= 0; i--) {
+      const piece = this.pieces[i];
+      if (piece.isPlaced) continue;
+
+      if (this.isPieceHit(piece, pos)) {
+        this.draggedPiece = piece;
+        this.dragOffset = {
+          x: pos.x - piece.currentX,
+          y: pos.y - piece.currentY
+        };
+
+        // Bring to front
+        const maxZ = Math.max(...this.pieces.map(p => p.zIndex));
+        piece.zIndex = maxZ + 1;
+        break;
+      }
+    }
+  }
+
+  handleMove(event) {
+    if (!this.draggedPiece) return;
+
+    const pos = this.getCanvasPosition(event);
+    
+    this.draggedPiece.currentX = Math.max(
+      0,
+      Math.min(
+        this.canvasWidth - this.pieceWidth,
+        pos.x - this.dragOffset.x
+      )
+    );
+    
+    this.draggedPiece.currentY = Math.max(
+      0,
+      Math.min(
+        this.canvasHeight - this.pieceHeight,
+        pos.y - this.dragOffset.y
+      )
+    );
+
+    this.render();
+  }
+
+  handleEnd() {
+    if (!this.draggedPiece) return;
+
+    const piece = this.draggedPiece;
+    const dx = piece.currentX - piece.targetX;
+    const dy = piece.currentY - piece.targetY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const snapThreshold = Math.min(this.pieceWidth, this.pieceHeight) * 0.25;
+
+    if (distance < snapThreshold) {
+      piece.currentX = piece.targetX;
+      piece.currentY = piece.targetY;
+      
+      if (!piece.isPlaced) {
+        piece.isPlaced = true;
+        this.completedCount++;
+        this.createConfetti(piece);
+
+        if (this.completedCount === this.TOTAL) {
+          setTimeout(() => this.complete(), 500);
+        }
+      }
+    }
+
+    this.draggedPiece = null;
+    this.render();
+  }
+
+  isPieceHit(piece, pos) {
+    return pos.x >= piece.currentX &&
+           pos.x <= piece.currentX + this.pieceWidth &&
+           pos.y >= piece.currentY &&
+           pos.y <= piece.currentY + this.pieceHeight;
+  }
+
+  createConfetti(piece) {
+    const colors = ['#fbbf24', '#f59e0b', '#ec4899', '#8b5cf6'];
+    const centerX = piece.targetX + this.pieceWidth / 2;
+    const centerY = piece.targetY + this.pieceHeight / 2;
+
+    for (let i = 0; i < 20; i++) {
+      const particle = document.createElement('div');
+      particle.style.cssText = `
+        position: fixed;
+        width: 8px;
+        height: 8px;
+        background: ${colors[Math.floor(Math.random() * colors.length)]};
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 1000;
+      `;
+
+      const rect = this.canvas.getBoundingClientRect();
+      particle.style.left = (rect.left + centerX) + 'px';
+      particle.style.top = (rect.top + centerY) + 'px';
+
+      document.body.appendChild(particle);
+
+      const angle = Math.random() * Math.PI * 2;
+      const velocity = 2 + Math.random() * 3;
+      const vx = Math.cos(angle) * velocity;
+      const vy = Math.sin(angle) * velocity - 2;
+
+      this.animateConfetti(particle, vx, vy);
+    }
+  }
+
+  animateConfetti(element, vx, vy) {
+    let x = 0, y = 0;
+    let opacity = 1;
+
+    const animate = () => {
+      x += vx;
+      y += vy;
+      vy += 0.15;
+      opacity -= 0.02;
+
+      element.style.transform = `translate(${x}px, ${y}px)`;
+      element.style.opacity = opacity;
+
+      if (opacity > 0) {
+        requestAnimationFrame(animate);
+      } else {
+        element.remove();
+      }
+    };
+
+    animate();
+  }
+
+  complete() {
+    this.isComplete = true;
+    this.revealOverlay.classList.add('active');
+    this.messageCard.classList.add('show');
+    this.hint.style.display = 'none';
+  }
+
+  handleResize() {
+    this.setupCanvas();
+    if (this.puzzleImage.complete) {
+      this.createPieces();
+      if (!this.isComplete) {
+        this.shufflePieces();
+      }
+      this.render();
+    }
+  }
+}
+
+// Start the game
+new PuzzleGame();

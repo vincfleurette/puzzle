@@ -3,26 +3,33 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Invitation 26 Octobre</title>
+  <title>Invitation 26 Octobre - Julie & Vincent</title>
   <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>Invitation 26 Octobre pour </br> célébrer notre Pacs</h1>
-      <h2>Julie & Vincent</h2>
-    </header>
+<div class="app">
+  <div class="header">
+    <h1>Invitation 26 Octobre</h1>
+    <p>Pour célébrer notre PACS</p>
+    <p class="names">Julie & Vincent</p>
+  </div>
 
-    <div class="board-wrap">
-      <canvas id="puzzle" width="1200" height="900" aria-label="Puzzle jigsaw"></canvas>
-      <canvas id="confetti" width="1200" height="900" aria-hidden="true" style="position:absolute; inset:0; pointer-events:none;"></canvas>
-    </div>
-
-    <div id="announce" class="announcement" role="status" aria-live="polite">
-      <h3><strong>Surprise !</strong> Nous attendons une fille 👶🏻✨</h3><br>
-      <span class="note">— Vincent & Julie</span>
+  <div class="puzzle-board">
+    <canvas id="puzzleCanvas" class="puzzle-canvas"></canvas>
+    <div id="revealOverlay" class="reveal-overlay">
+      <img id="revealImage" src="assets/img/baby.jpg" alt="Révélation">
     </div>
   </div>
+
+  <div id="messageCard" class="message-card">
+    <div class="icon">✨</div>
+    <h2>Surprise !</h2>
+    <p class="announcement">Nous attendons une fille pour début mars 👶🏻</p>
+    <p class="signature">— Vincent & Julie</p>
+  </div>
+
+  <p id="hint" class="hint">Déplacez les pièces pour reconstituer l'image 🧩</p>
+</div>
 
   <script src="assets/js/app.js" defer></script>
 </body>
