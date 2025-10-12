@@ -1,0 +1,4 @@
+# wrangler.toml (wrangler v3.88.0^)
+[observability]
+enabled = false
+
