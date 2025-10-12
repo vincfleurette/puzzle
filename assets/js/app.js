@@ -387,6 +387,13 @@ class PuzzleGame {
 
   complete() {
     this.isComplete = true;
+    
+    // Preload reveal image only when puzzle is complete
+    const revealImg = document.getElementById('revealImage');
+    if (!revealImg.complete) {
+      revealImg.src = revealImg.src; // Force reload if needed
+    }
+    
     this.revealOverlay.classList.add('active');
     this.messageCard.classList.add('show');
     this.hint.style.display = 'none';

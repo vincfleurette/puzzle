@@ -86,10 +86,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  visibility: hidden;
 }
 
 .reveal-overlay.active {
   opacity: 1;
+  visibility: visible;
 }
 
 .reveal-overlay img {
